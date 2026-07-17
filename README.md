@@ -1,5 +1,7 @@
 # Support Triage LLM — триаж обращений клиентов через локальную LLM
 
+![Tests](https://github.com/exist-ty/support-triage-llm/actions/workflows/test.yml/badge.svg)
+
 Пет-проект на стыке Data/LLM-инженерии: обращения клиентов интернет-магазина
 классифицируются локальной LLM (Qwen2.5-3B-Instruct через Ollama, без единого
 внешнего API-вызова и без затрат на токены) с RAG-контекстом из базы знаний

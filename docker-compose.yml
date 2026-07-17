@@ -1,0 +1,25 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      # Модели уже скачаны на D: локальным Ollama — переиспользуем тот же
+      # каталог вместо повторной загрузки 2GB+ внутрь контейнера.
+      - D:/ollama/models:/root/.ollama/models
+
+  app:
+    build: .
+    depends_on:
+      - ollama
+    environment:
+      DB_HOST: host.docker.internal
+      DB_PORT: "5432"
+      DB_NAME: etl_portfolio
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD}
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_CHAT_MODEL: qwen2.5:3b-instruct
+      OLLAMA_EMBED_MODEL: all-minilm
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

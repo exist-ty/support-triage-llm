@@ -23,7 +23,12 @@ CREATE TABLE kb_documents (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    embedding VECTOR(384) NOT NULL
+    embedding VECTOR(384) NOT NULL,
+    -- GENERATED ALWAYS ... STORED: пересчитывается автоматически при
+    -- INSERT/UPDATE, load_kb.py не должен сам его поддерживать в актуальном
+    -- состоянии. 'russian'-конфигурация — стемминг под язык базы знаний
+    -- (src/kb.py), без неё full-text не находил бы "доставка" по "доставки".
+    search_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('russian', title || ' ' || content)) STORED
 );
 
 -- HNSW — быстрее строится и точнее IVFFlat на малых/средних базах знаний
@@ -31,6 +36,11 @@ CREATE TABLE kb_documents (
 -- vector_cosine_ops — под тот же cosine similarity, что был в src/rag.py
 CREATE INDEX idx_kb_documents_embedding_hnsw
     ON kb_documents USING hnsw (embedding vector_cosine_ops);
+
+-- GIN — стандартный индекс под full-text (см. src/rag.py::sparse_search,
+-- «Hybrid search» в README)
+CREATE INDEX idx_kb_documents_search_tsv
+    ON kb_documents USING gin (search_tsv);
 
 CREATE TABLE client_messages (
     message_id SERIAL PRIMARY KEY,

@@ -1,8 +1,9 @@
 """Основной пайплайн: для каждого необработанного client_messages —
-embed -> retrieval топ-k из kb_documents (векторный поиск в Postgres,
-см. src/rag.py) -> классификация через Qwen -> запись в triage_results.
-Обрабатывает сообщения по одному (не батчами): это пакетный ночной джоб,
-а не realtime-сервис, задержка в секундах на сообщение здесь не проблема."""
+embed -> hybrid retrieval топ-k из kb_documents (dense pgvector + sparse
+full-text, объединённые RRF — см. src/rag.py::hybrid_search) ->
+классификация через Qwen -> запись в triage_results. Обрабатывает
+сообщения по одному (не батчами): это пакетный ночной джоб, а не
+realtime-сервис, задержка в секундах на сообщение здесь не проблема."""
 import sys
 import time
 from pathlib import Path
@@ -16,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.db import get_vector_engine
 from src.ollama_client import CHAT_MODEL, embed
-from src.rag import top_k_similar
+from src.rag import hybrid_search
 from src.triage import classify_message
 
 TOP_K = 2
@@ -38,14 +39,14 @@ def fetch_pending_messages(engine) -> pd.DataFrame:
 def run() -> None:
     engine = get_vector_engine()
     pending = fetch_pending_messages(engine)
-    print(f"Обрабатываю {len(pending)} сообщений моделью {CHAT_MODEL}...")
+    print(f"Processing {len(pending)} messages with {CHAT_MODEL}...")
 
     processed = 0
     for _, row in pending.iterrows():
         start = time.perf_counter()
 
         query_embedding = embed([row["message_text"]])[0]
-        retrieved = top_k_similar(engine, query_embedding, k=TOP_K)
+        retrieved = hybrid_search(engine, row["message_text"], query_embedding, k=TOP_K)
         result = classify_message(row["message_text"], retrieved)
 
         latency_ms = int((time.perf_counter() - start) * 1000)
@@ -78,7 +79,7 @@ def run() -> None:
         if processed % 20 == 0:
             print(f"  {processed}/{len(pending)}")
 
-    print(f"Готово: обработано {processed} сообщений")
+    print(f"Done: processed {processed} messages")
 
 
 if __name__ == "__main__":

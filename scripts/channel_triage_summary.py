@@ -1,8 +1,10 @@
 """Связывает результат триажа с маркетинговым каналом клиента —
-JOIN triage_results -> client_messages -> stg_customers.channel
-(таблица из etl-portfolio). Показывает, различается ли профиль обращений
-(доля жалоб/приоритет) между каналами привлечения — мостик к
-product-marketing-analytics, а не дублирование его логики."""
+triage_results/client_messages живут в БД triage (pgvector, отдельный
+контейнер), stg_customers — в etl_portfolio (etl-portfolio). Раз это две
+разные базы Postgres, кросс-базовый JOIN здесь делает pandas.merge, а не
+SQL: показывает, различается ли профиль обращений (доля жалоб/приоритет)
+между каналами привлечения — мостик к product-marketing-analytics, а не
+дублирование его логики."""
 import sys
 from pathlib import Path
 
@@ -12,23 +14,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.db import get_engine
+from src.db import get_engine, get_vector_engine
 
-QUERY = """
-SELECT
-    c.channel,
-    r.category,
-    r.sentiment,
-    r.priority
+TRIAGE_QUERY = """
+SELECT m.customer_id, r.category, r.sentiment, r.priority
 FROM triage_results r
 JOIN client_messages m ON m.message_id = r.message_id
-JOIN stg_customers c ON c.customer_id = m.customer_id
 """
 
 
 def build_summary() -> pd.DataFrame:
-    engine = get_engine()
-    df = pd.read_sql(QUERY, engine)
+    triage = pd.read_sql(TRIAGE_QUERY, get_vector_engine())
+    customers = pd.read_sql("SELECT customer_id, channel FROM stg_customers", get_engine())
+
+    df = triage.merge(customers, on="customer_id", how="inner")
 
     summary = (
         df.groupby("channel")

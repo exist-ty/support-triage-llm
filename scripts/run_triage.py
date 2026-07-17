@@ -1,8 +1,8 @@
 """Основной пайплайн: для каждого необработанного client_messages —
-embed -> retrieval топ-k из kb_documents -> классификация через Qwen ->
-запись в triage_results. Обрабатывает сообщения по одному (не батчами):
-это пакетный ночной джоб, а не realtime-сервис, задержка в секундах на
-сообщение здесь не проблема."""
+embed -> retrieval топ-k из kb_documents (векторный поиск в Postgres,
+см. src/rag.py) -> классификация через Qwen -> запись в triage_results.
+Обрабатывает сообщения по одному (не батчами): это пакетный ночной джоб,
+а не realtime-сервис, задержка в секундах на сообщение здесь не проблема."""
 import sys
 import time
 from pathlib import Path
@@ -14,17 +14,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.db import get_engine
+from src.db import get_vector_engine
 from src.ollama_client import CHAT_MODEL, embed
 from src.rag import top_k_similar
 from src.triage import classify_message
 
 TOP_K = 2
-
-
-def fetch_kb_documents(engine) -> list[dict]:
-    df = pd.read_sql("SELECT id, title, content, embedding FROM kb_documents", engine)
-    return df.to_dict(orient="records")
 
 
 def fetch_pending_messages(engine) -> pd.DataFrame:
@@ -41,8 +36,7 @@ def fetch_pending_messages(engine) -> pd.DataFrame:
 
 
 def run() -> None:
-    engine = get_engine()
-    kb_documents = fetch_kb_documents(engine)
+    engine = get_vector_engine()
     pending = fetch_pending_messages(engine)
     print(f"Обрабатываю {len(pending)} сообщений моделью {CHAT_MODEL}...")
 
@@ -51,7 +45,7 @@ def run() -> None:
         start = time.perf_counter()
 
         query_embedding = embed([row["message_text"]])[0]
-        retrieved = top_k_similar(query_embedding, kb_documents, k=TOP_K)
+        retrieved = top_k_similar(engine, query_embedding, k=TOP_K)
         result = classify_message(row["message_text"], retrieved)
 
         latency_ms = int((time.perf_counter() - start) * 1000)

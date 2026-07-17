@@ -1,6 +1,10 @@
 """Генерирует синтетические обращения клиентов в поддержку, привязанные
-к реальным customer_id/orders из etl-portfolio (та же БД etl_portfolio) —
-не выдуманные customer_id, а реально существующие клиенты и заказы."""
+к реальным customer_id/orders из etl-portfolio (БД etl_portfolio, только на
+чтение) — не выдуманные customer_id, а реально существующие клиенты и
+заказы. Сами обращения пишутся в БД triage (pgvector, см.
+src/db.py::get_vector_engine) вместе с true_category — истинной темой
+шаблона, из которого сгенерировано сообщение (не ручная разметка, а
+известная по построению "истина", нужная scripts/evaluate_llm.py)."""
 import random
 import sys
 from pathlib import Path
@@ -12,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.db import get_engine
+from src.db import get_engine, get_vector_engine
 
 random.seed(42)
 
@@ -54,9 +58,9 @@ def fetch_orders(engine) -> pd.DataFrame:
 
 
 def generate_messages() -> None:
-    engine = get_engine()
-    customers = fetch_customers(engine)
-    orders = fetch_orders(engine)
+    source_engine = get_engine()
+    customers = fetch_customers(source_engine)
+    orders = fetch_orders(source_engine)
     orders_by_customer = orders.groupby("customer_id")
 
     rows = []
@@ -71,18 +75,22 @@ def generate_messages() -> None:
             order_id, product = random.choice(orders["order_id"].tolist()), random.choice(orders["product_name"].tolist())
 
         text_ = template.format(order_id=order_id, product=product)
-        rows.append({"customer_id": customer_id, "message_text": text_, "_topic": topic})
+        rows.append({"customer_id": customer_id, "message_text": text_, "true_category": topic})
 
-    with engine.begin() as conn:
+    vector_engine = get_vector_engine()
+    with vector_engine.begin() as conn:
         conn.execute(text("TRUNCATE TABLE triage_results CASCADE"))
         conn.execute(text("TRUNCATE TABLE client_messages RESTART IDENTITY CASCADE"))
         for row in rows:
             conn.execute(
-                text("INSERT INTO client_messages (customer_id, message_text) VALUES (:customer_id, :message_text)"),
-                {"customer_id": row["customer_id"], "message_text": row["message_text"]},
+                text(
+                    "INSERT INTO client_messages (customer_id, message_text, true_category) "
+                    "VALUES (:customer_id, :message_text, :true_category)"
+                ),
+                row,
             )
 
-    topic_counts = pd.Series([r["_topic"] for r in rows]).value_counts()
+    topic_counts = pd.Series([r["true_category"] for r in rows]).value_counts()
     print(f"Inserted {len(rows)} client messages")
     print(topic_counts)
 

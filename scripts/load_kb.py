@@ -1,5 +1,6 @@
 """Считает эмбеддинги для базы знаний (src/kb.py) через локальную модель
-all-minilm и загружает в kb_documents (truncate + insert)."""
+all-minilm и загружает в kb_documents (truncate + insert) в БД triage
+(pgvector, см. src/db.py::get_vector_engine)."""
 import sys
 from pathlib import Path
 
@@ -9,13 +10,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from sqlalchemy import text
 
-from src.db import get_engine
+from src.db import get_vector_engine
 from src.kb import KB_DOCUMENTS
 from src.ollama_client import embed
+from src.rag import to_vector_literal
 
 
 def load_kb() -> None:
-    engine = get_engine()
+    engine = get_vector_engine()
     contents = [doc["content"] for doc in KB_DOCUMENTS]
     embeddings = embed(contents)
 
@@ -25,9 +27,9 @@ def load_kb() -> None:
             conn.execute(
                 text(
                     "INSERT INTO kb_documents (title, content, embedding) "
-                    "VALUES (:title, :content, :embedding)"
+                    "VALUES (:title, :content, (:embedding)::vector)"
                 ),
-                {"title": doc["title"], "content": doc["content"], "embedding": embedding},
+                {"title": doc["title"], "content": doc["content"], "embedding": to_vector_literal(embedding)},
             )
     print(f"Loaded {len(KB_DOCUMENTS)} KB documents with embeddings")
 

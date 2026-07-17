@@ -8,18 +8,45 @@ services:
       # каталог вместо повторной загрузки 2GB+ внутрь контейнера.
       - D:/ollama/models:/root/.ollama/models
 
+  # Отдельная БД под kb_documents/client_messages/triage_results: локальный
+  # Postgres 17 на Windows не даёт поставить extension vector без сборки из
+  # исходников (см. sql/triage_schema.sql), а pgvector/pgvector — готовый
+  # образ с уже собранным расширением. customer_id в client_messages из-за
+  # этого больше не FK на stg_customers (та таблица — в другой БД, другом
+  # контейнере; Postgres не умеет FK между базами) — это осознанный компромисс,
+  # не забытый constraint.
+  vector-db:
+    image: pgvector/pgvector:pg17
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: triage
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${VECTOR_DB_PASSWORD}
+    volumes:
+      - vector-db-data:/var/lib/postgresql/data
+
   app:
     build: .
     depends_on:
       - ollama
+      - vector-db
     environment:
       DB_HOST: host.docker.internal
       DB_PORT: "5432"
       DB_NAME: etl_portfolio
       DB_USER: postgres
       DB_PASSWORD: ${DB_PASSWORD}
+      VECTOR_DB_HOST: vector-db
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_NAME: triage
+      VECTOR_DB_USER: postgres
+      VECTOR_DB_PASSWORD: ${VECTOR_DB_PASSWORD}
       OLLAMA_HOST: http://ollama:11434
       OLLAMA_CHAT_MODEL: qwen2.5:3b-instruct
       OLLAMA_EMBED_MODEL: all-minilm
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  vector-db-data:

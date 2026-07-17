@@ -1,35 +1,48 @@
--- Таблицы триажа живут в той же БД etl_portfolio, что и etl-portfolio/
--- product-marketing-analytics: customer_id/channel переиспользуются из
--- stg_customers, а не дублируются.
+-- Применяется к ОТДЕЛЬНОЙ базе triage (контейнер pgvector/pgvector:pg17,
+-- порт 5433 — см. docker-compose.yml и src/db.py::get_vector_engine),
+-- а не к etl_portfolio, где живут stg_customers/stg_orders. Локальный
+-- Postgres 17 на Windows не даёт поставить extension vector без сборки из
+-- исходников (не числится в pg_available_extensions) — pgvector/pgvector
+-- даёт его "из коробки", это и есть переход на pgvector.
 --
--- pgvector в локальной установке PostgreSQL 17 недоступен (не в
--- pg_available_extensions — потребовалась бы сборка из исходников на
--- Windows). При базе знаний в 10-15 документов это не оправдано: эмбеддинги
--- хранятся как double precision[], а cosine similarity считается на
--- стороне Python (numpy) в src/rag.py. Явный компромисс по объёму данных,
--- как и решение про индексы в etl-portfolio.
+-- Плата за это: client_messages.customer_id больше не FK на
+-- stg_customers.customer_id — Postgres не умеет внешние ключи между базами
+-- (тем более между разными контейнерами). Ссылочная целостность здесь не
+-- гарантируется constraint'ом, а держится на том, что generate_messages.py
+-- берёт customer_id из реального SELECT по etl_portfolio. Кросс-базовый
+-- JOIN (channel_triage_summary.py) поэтому теперь делается в pandas,
+-- а не в SQL — см. комментарий в этом скрипте.
+CREATE EXTENSION IF NOT EXISTS vector;
+
 DROP TABLE IF EXISTS triage_results CASCADE;
 DROP TABLE IF EXISTS client_messages CASCADE;
 DROP TABLE IF EXISTS kb_documents CASCADE;
 
+-- all-minilm (Ollama) отдаёt 384-мерные эмбеддинги
 CREATE TABLE kb_documents (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    embedding DOUBLE PRECISION[] NOT NULL
+    embedding VECTOR(384) NOT NULL
 );
+
+-- HNSW — быстрее строится и точнее IVFFlat на малых/средних базах знаний
+-- (IVFFlat нужен только когда HNSW не влезает по памяти при построении);
+-- vector_cosine_ops — под тот же cosine similarity, что был в src/rag.py
+CREATE INDEX idx_kb_documents_embedding_hnsw
+    ON kb_documents USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE client_messages (
     message_id SERIAL PRIMARY KEY,
-    customer_id INTEGER NOT NULL REFERENCES stg_customers(customer_id),
+    customer_id INTEGER NOT NULL,  -- см. комментарий сверху: не FK, другая БД
     message_text TEXT NOT NULL,
+    -- Истинная категория из шаблона генерации (scripts/generate_messages.py)
+    -- — не ручная разметка человеком, а известная "истина" по построению
+    -- синтетических данных. Используется для scripts/evaluate_llm.py.
+    true_category TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
--- Маркетинговый канал не дублируется здесь: он уже есть в
--- stg_customers.channel и достаётся через JOIN по customer_id (см.
--- scripts/channel_triage_summary.py) — дублирование только увеличило бы
--- риск рассинхронизации без выигрыша в этом объёме данных.
 CREATE INDEX idx_client_messages_created_at ON client_messages(created_at);
 
 CREATE TABLE triage_results (

@@ -1,29 +1,40 @@
-"""Retrieval поверх kb_documents: brute-force cosine similarity в numpy.
-Оправдано только при малом размере базы знаний — см. комментарий в
-sql/triage_schema.sql про отказ от pgvector."""
+"""Retrieval поверх kb_documents: векторный поиск средствами Postgres
+(pgvector, HNSW-индекс, оператор <=> — cosine distance), а не brute-force
+в numpy. Раньше здесь был Python-цикл по всем документам (оправдано только
+при базе знаний в 10-15 документов, см. историю sql/triage_schema.sql) —
+теперь similarity считает сам движок БД, как в проде."""
 from __future__ import annotations
 
-import numpy as np
+from sqlalchemy import Engine, text
 
 
-def top_k_similar(
-    query_embedding: list[float],
-    documents: list[dict],
-    k: int = 2,
-) -> list[dict]:
-    """documents: [{"id", "title", "content", "embedding"}, ...].
+def to_vector_literal(embedding: list[float]) -> str:
+    """Текстовое представление вектора для psycopg2 (`'[...]'::vector`) —
+    переиспользуется в scripts/load_kb.py при записи эмбеддингов."""
+    return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
-    Возвращает k документов с наибольшим cosine similarity к query_embedding.
+
+def top_k_similar(engine: Engine, query_embedding: list[float], k: int = 2) -> list[dict]:
+    """Возвращает k документов с наибольшим cosine similarity к query_embedding.
+
+    `embedding <=> :query` — cosine distance (0 = идентичны, 2 = противоположны);
+    ORDER BY по нему же использует HNSW-индекс. similarity = 1 - distance,
+    чтобы сохранить ту же семантику (больше = ближе), что была в старой
+    numpy-версии.
     """
-    query = np.array(query_embedding)
-    query_norm = query / np.linalg.norm(query)
+    query_vector = to_vector_literal(query_embedding)
 
-    scored = []
-    for doc in documents:
-        vec = np.array(doc["embedding"])
-        vec_norm = vec / np.linalg.norm(vec)
-        similarity = float(np.dot(query_norm, vec_norm))
-        scored.append((similarity, doc))
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT id, title, content, 1 - (embedding <=> (:query)::vector) AS similarity
+                FROM kb_documents
+                ORDER BY embedding <=> (:query)::vector
+                LIMIT :k
+                """
+            ),
+            {"query": query_vector, "k": k},
+        ).mappings().all()
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [doc for _, doc in scored[:k]]
+    return [dict(row) for row in rows]

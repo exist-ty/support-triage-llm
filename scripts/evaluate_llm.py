@@ -4,18 +4,32 @@ category, которую реально предсказала Qwen2.5-3B-Instru
 разметка человеком, а известная по построению синтетических данных
 "истина" — но это ровно та же метрика (F1 по классам, confusion matrix),
 что применяется при разметке людьми."""
+import json
+import os
 import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import mlflow
 import pandas as pd
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.db import get_vector_engine
+
+if sys.platform == "win32":
+    # mlflow печатает emoji ("🏃 View run...") при завершении run — в стандартной
+    # cp1252-консоли Windows это падает с UnicodeEncodeError
+    sys.stdout.reconfigure(encoding="utf-8")
+
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5501")
+MLFLOW_EXPERIMENT = "support-triage"
+# записан run_triage.py — дологируем метрики в тот же run, чтобы параметры
+# (модель, top_k, rrf_k) и метрики качества были в одном месте в MLflow UI
+RUN_ID_PATH = PROJECT_ROOT / "exports" / "mlflow_run_id.json"
 
 QUERY = """
 SELECT m.true_category, r.category AS predicted_category
@@ -62,11 +76,25 @@ def evaluate() -> None:
     print(classification_report(df["true_category"], df["predicted_category"], labels=labels, zero_division=0))
 
     matrix = confusion_matrix(df["true_category"], df["predicted_category"], labels=labels)
+    accuracy = (df["true_category"] == df["predicted_category"]).mean()
+    f1_macro = f1_score(df["true_category"], df["predicted_category"], labels=labels, average="macro", zero_division=0)
+    f1_weighted = f1_score(df["true_category"], df["predicted_category"], labels=labels, average="weighted", zero_division=0)
 
     export_dir = PROJECT_ROOT / "exports"
     export_dir.mkdir(exist_ok=True)
     pd.DataFrame(matrix, index=labels, columns=labels).to_csv(export_dir / "confusion_matrix.csv")
     plot_confusion_matrix(labels, matrix, export_dir / "confusion_matrix.png")
+
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+    run_id = json.loads(RUN_ID_PATH.read_text())["run_id"] if RUN_ID_PATH.exists() else None
+
+    with mlflow.start_run(run_id=run_id, run_name=None if run_id else "evaluate_llm"):
+        mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_metric("f1_macro", f1_macro)
+        mlflow.log_metric("f1_weighted", f1_weighted)
+        mlflow.log_artifact(str(export_dir / "confusion_matrix.png"))
+        mlflow.log_artifact(str(export_dir / "confusion_matrix.csv"))
 
 
 if __name__ == "__main__":

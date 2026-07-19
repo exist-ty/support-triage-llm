@@ -8,3 +8,7 @@ pydantic
 pytest
 scikit-learn
 matplotlib
+# версия зафиксирована ровно под образ сервера в docker-compose хаба
+# (ghcr.io/mlflow/mlflow:v2.19.0) — новый клиент шлёт /logged-models API,
+# которого нет в этом образе сервера (404)
+mlflow==2.19.0

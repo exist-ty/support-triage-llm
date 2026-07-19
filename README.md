@@ -296,6 +296,24 @@ Confusion matrix называет ровно то, что раньше было 
   лексический сигнал, что помогает полнотекстовому поиску в других случаях,
   здесь его и подводит.
 
+## Трекинг экспериментов (MLflow)
+
+`scripts/run_triage.py` и `scripts/evaluate_llm.py` пишут в **один** MLflow
+run (experiment `support-triage`), а не в два разных: `run_triage.py`
+логирует параметры (`chat_model`, `embed_model`, `top_k`, `rrf_k` — константа
+RRF из `src/rag.py::reciprocal_rank_fusion`, не тюнится этим скриптом) и
+`run_id` пишет в `exports/mlflow_run_id.json`; `evaluate_llm.py` читает этот
+файл и дологирует туда же метрики (`accuracy`, `f1_macro`, `f1_weighted`) и
+confusion matrix — иначе параметры и метрики оказались бы в разных runs без
+связи между ними, а метрики качества физически появляются только после того,
+как triage готов, не в момент классификации отдельных сообщений.
+
+MLflow — общий сервис в `docker-compose.yml` [хаба](https://github.com/exist-ty/Nikolay-Kolesnikov-Data-Engineering-Applied-ML-LLM-Portfolio-Hub)
+(`docker compose up -d mlflow`, UI на `http://localhost:5501`). Версия клиента
+(`mlflow==2.19.0`) зафиксирована ровно под тег образа сервера — см. README
+`product-marketing-analytics` за подробностями (там же впервые поймали
+несовместимость версий).
+
 ## Честные ограничения
 
 - **Категории схлопываются predictable-образом** — см. confusion matrix

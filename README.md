@@ -26,31 +26,23 @@ Python, Ollama (Qwen2.5-3B-Instruct + all-minilm), PostgreSQL + pgvector
 
 ## Архитектура
 
-```
-client_messages (БД triage/pgvector; customer_id — из реального
-                 customer_id в stg_customers, БД etl_portfolio)
-        │
-        ▼
-  embed (all-minilm, Ollama)
-        │
-        ▼
-  гибридный поиск: векторный (pgvector, HNSW, <=>) + полнотекстовый
-  (tsvector, GIN), объединены через RRF  ──▶  src/rag.py
-        │
-        ▼
-  промпт: обращение + top-k выдержек из базы знаний
-        │
-        ▼
-  Qwen2.5-3B-Instruct (Ollama, format=json)
-        │
-        ▼
-  pydantic-валидация + retry на невалидный JSON  ──▶  src/triage.py
-        │
-        ▼
-  triage_results (category, sentiment, priority, confidence, suggested_reply)
-        │
-        ▼
-  scripts/evaluate_llm.py: category vs. true_category → F1, confusion matrix
+```mermaid
+graph TD
+    A[("client_messages<br/>БД triage/pgvector<br/>customer_id → stg_customers (etl_portfolio)")]:::db
+    A --> B["embed<br/>all-minilm (Ollama)"]:::model
+    B --> C["Гибридный поиск (RRF)<br/>векторный (pgvector, HNSW, &lt;=&gt;) + полнотекстовый (tsvector, GIN)"]:::process
+    C -.-> C1["src/rag.py"]:::code
+    C --> D["Промпт: обращение + top-k<br/>выдержек из базы знаний"]:::process
+    D --> E["Qwen2.5-3B-Instruct<br/>(Ollama, format=json)"]:::model
+    E --> F["pydantic-валидация<br/>+ retry на невалидный JSON"]:::process
+    F -.-> F1["src/triage.py"]:::code
+    F --> G[("triage_results<br/>category · sentiment · priority<br/>confidence · suggested_reply")]:::db
+    G --> H["scripts/evaluate_llm.py<br/>category vs. true_category → F1, confusion matrix"]:::process
+
+    classDef db fill:#123a5e,stroke:#3987e5,color:#dbeafe,stroke-width:2px
+    classDef model fill:#4a1f3d,stroke:#e87ba4,color:#fbe4ee,stroke-width:2px
+    classDef process fill:#2a2140,stroke:#9085e9,color:#e8e6ff,stroke-width:2px
+    classDef code fill:none,stroke:#8b8a85,stroke-width:1px,color:#8b8a85,stroke-dasharray:3 3
 ```
 
 ## Структура

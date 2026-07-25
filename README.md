@@ -38,17 +38,33 @@ graph TD
     B --> C["Гибридный поиск (RRF)<br/>векторный (pgvector, HNSW, &lt;=&gt;) + полнотекстовый (tsvector, GIN)"]:::process
     C -.-> C1["src/rag.py"]:::code
     C --> D["Промпт: обращение + top-k<br/>выдержек из базы знаний"]:::process
-    D --> E["Qwen2.5-3B-Instruct<br/>(Ollama, format=json)"]:::model
-    E --> F["pydantic-валидация<br/>+ retry на невалидный JSON"]:::process
+    D --> E{"classify_message(chat_fn)<br/>src/triage.py"}:::process
+
+    E --> E1["Qwen2.5-3B-Instruct<br/>(Ollama, локально — backend по умолчанию)"]:::model
+    E -.->|"compare_models.py"| E2["Llama 3.3 70B Instruct<br/>(Groq API, облако)"]:::cloud
+
+    E1 --> F["pydantic-валидация<br/>+ retry на невалидный JSON"]:::process
+    E2 -.-> F
     F -.-> F1["src/triage.py"]:::code
+
     F --> G[("triage_results<br/>category · sentiment · priority<br/>confidence · suggested_reply")]:::db
-    G --> H["scripts/evaluate_llm.py<br/>category vs. true_category → F1, confusion matrix"]:::process
+    E2 -.-> H[("model_comparison_results<br/>Qwen vs Llama, тот же message_id")]:::cloud
+
+    G --> I["scripts/evaluate_llm.py<br/>category vs. true_category → F1, confusion matrix"]:::process
+    H -.-> J["scripts/compare_models.py<br/>accuracy/F1/latency: локально vs облако"]:::cloud
 
     classDef db fill:#123a5e,stroke:#3987e5,color:#dbeafe,stroke-width:2px
     classDef model fill:#4a1f3d,stroke:#e87ba4,color:#fbe4ee,stroke-width:2px
     classDef process fill:#2a2140,stroke:#9085e9,color:#e8e6ff,stroke-width:2px
     classDef code fill:none,stroke:#8b8a85,stroke-width:1px,color:#8b8a85,stroke-dasharray:3 3
+    classDef cloud fill:#5c3a10,stroke:#eda100,color:#fdecc8,stroke-width:2px
 ```
+
+Сплошные стрелки — продовый путь (`run_triage.py`, только локальная Qwen).
+Пунктирные — опциональный путь `compare_models.py`, который дополнительно
+прогоняет то же сообщение через облачную Llama 3.3 70B и пишет в отдельную
+`model_comparison_results`, не трогая `triage_results`. См. «Локально vs
+облако» ниже про то, какие данные при этом уходят по HTTPS на Groq.
 
 ## Структура
 

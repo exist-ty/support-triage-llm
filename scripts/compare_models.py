@@ -64,13 +64,28 @@ def run_comparison() -> None:
         raise RuntimeError("Нет размеченных сообщений — прогнать scripts/generate_messages.py")
 
     with engine.begin() as conn:
-        conn.execute(text(open(PROJECT_ROOT / "sql" / "model_comparison_schema.sql").read()))
+        conn.execute(text(open(PROJECT_ROOT / "sql" / "model_comparison_schema.sql", encoding="utf-8").read()))
 
     print(f"n = {len(messages)} сообщений, модели: {', '.join(m for m, _ in BACKENDS)}\n")
 
     for model_name, chat_fn in BACKENDS:
-        print(f"--- {model_name} ---")
-        for i, row in messages.iterrows():
+        with engine.connect() as conn:
+            done_ids = set(
+                conn.execute(
+                    text("SELECT message_id FROM model_comparison_results WHERE model = :model"),
+                    {"model": model_name},
+                ).scalars()
+            )
+        # Возобновляемость: облачный backend рационирован (реально наблюдался
+        # 429 на ~33-м из 45 запросов) — перезапуск после сбоя не должен
+        # повторно тратить квоту на уже посчитанные message_id.
+        pending = messages[~messages["message_id"].isin(done_ids)]
+        if done_ids:
+            print(f"--- {model_name} (пропускаю {len(done_ids)} уже посчитанных) ---")
+        else:
+            print(f"--- {model_name} ---")
+
+        for i, row in pending.iterrows():
             query_embedding = embed([row["message_text"]])[0]
             retrieved = hybrid_search(engine, row["message_text"], query_embedding, k=TOP_K)
 

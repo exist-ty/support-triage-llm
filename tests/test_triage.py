@@ -88,3 +88,37 @@ def test_classify_message_raises_after_exhausting_retries(monkeypatch):
 
     with pytest.raises(RuntimeError):
         triage.classify_message("Товар не работает", retrieved_docs=[], max_retries=1)
+
+
+def test_classify_message_uses_explicit_chat_fn_over_default(monkeypatch):
+    # Дефолтный chat_json нарочно ломается — если classify_message проигнорирует
+    # переданный chat_fn и всё равно уйдёт в дефолт, тест провалится с ошибкой
+    # дефолтной функции, а не молча даст правильный ответ по случайности.
+    def default_should_not_be_called(prompt, system=None):
+        raise AssertionError("classify_message must use the explicit chat_fn, not the default")
+
+    monkeypatch.setattr(triage, "chat_json", default_should_not_be_called)
+
+    valid_response = json.dumps({
+        "category": "payment",
+        "sentiment": "neutral",
+        "priority": "medium",
+        "confidence": 0.8,
+        "suggested_reply": "...",
+    })
+    explicit_fn = lambda prompt, system=None: valid_response  # noqa: E731
+
+    result = triage.classify_message(
+        "Не могу оплатить заказ", retrieved_docs=[], chat_fn=explicit_fn, model_name="llama-3.3-70b-versatile",
+    )
+    assert result.category == "payment"
+
+
+def test_classify_message_error_message_names_explicit_model(monkeypatch):
+    monkeypatch.setattr(triage, "chat_json", lambda prompt, system=None: "still not json")
+
+    with pytest.raises(RuntimeError, match="llama-3.3-70b-versatile"):
+        triage.classify_message(
+            "Товар не работает", retrieved_docs=[], max_retries=0,
+            chat_fn=lambda prompt, system=None: "still not json", model_name="llama-3.3-70b-versatile",
+        )

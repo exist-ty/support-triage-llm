@@ -4,15 +4,19 @@
 
 Пет-проект на стыке Data/LLM-инженерии: обращения клиентов интернет-магазина
 классифицируются локальной LLM (Qwen2.5-3B-Instruct через Ollama, без единого
-внешнего API-вызова и без затрат на токены) с RAG-контекстом из базы знаний
-магазина, результат пишется в Postgres и связывается с той же БД, что
-использует [`etl-portfolio`](https://github.com/exist-ty/etl-portfolio) и
-[`product-marketing-analytics`](https://github.com/exist-ty/product-marketing-analytics).
+внешнего API-вызова и без затрат на токены по умолчанию) с RAG-контекстом из
+базы знаний магазина, результат пишется в Postgres и связывается с той же
+БД, что использует [`etl-portfolio`](https://github.com/exist-ty/etl-portfolio)
+и [`product-marketing-analytics`](https://github.com/exist-ty/product-marketing-analytics).
+Отдельно, опционально (`scripts/compare_models.py`) — честное сравнение с
+облачной Llama 3.3 70B Instruct (Groq API) на том же пайплайне: см.
+«Локально vs облако» ниже.
 
 Три вопроса, на которые отвечает этот репозиторий:
 
 1. Можно ли классифицировать и приоритизировать обращения в поддержку локальной
-   3B-моделью без GPU и без внешнего API — и где проходит граница её надёжности?
+   3B-моделью без GPU и без внешнего API — и где проходит граница её надёжности
+   по сравнению с моделью на порядок крупнее?
 2. Различается ли профиль обращений (доля негатива/high-priority) между
    маркетинговыми каналами привлечения?
 3. Как выглядит production-грейд RAG (векторный индекс в БД, а не Python-цикл)
@@ -20,9 +24,10 @@
 
 ## Стек
 
-Python, Ollama (Qwen2.5-3B-Instruct + all-minilm), PostgreSQL + pgvector
-(HNSW) + полнотекстовый поиск (tsvector/GIN), pydantic, scikit-learn
-(evaluation), Docker, pytest.
+Python, Ollama (Qwen2.5-3B-Instruct + all-minilm), Groq API (Llama 3.3 70B
+Instruct — опциональный облачный backend для сравнения), PostgreSQL +
+pgvector (HNSW) + полнотекстовый поиск (tsvector/GIN), pydantic,
+scikit-learn (evaluation), Docker, pytest.
 
 ## Архитектура
 
@@ -287,6 +292,43 @@ Confusion matrix называет ровно то, что раньше было 
   `delivery_status`. Улучшение реальное, но частичное: тот же самый
   лексический сигнал, что помогает полнотекстовому поиску в других случаях,
   здесь его и подводит.
+
+## Локально vs облако: Qwen2.5-3B vs Llama 3.3 70B (`scripts/compare_models.py`)
+
+Тот же пайплайн (retrieval не меняется — сравнивается только шаг
+классификации, `src/triage.py::classify_message` принимает `chat_fn` как
+параметр) прогоняется через два бэкенда: локальную Qwen2.5-3B-Instruct
+(Ollama, CPU, `src/ollama_client.py`) и облачную Llama 3.3 70B Instruct
+(Groq API, `src/llama_groq_client.py`). Оба проходят через один и тот же
+промпт, парсинг и retry — разница объясняется моделью, а не разным кодом
+вокруг неё. Результаты пишутся в отдельную `model_comparison_results`
+(composite PK `message_id, model`), продовая `triage_results` не трогается.
+
+**Данные.** `message_text` — синтетические сообщения (`generate_messages.py`),
+не переписка реальных клиентов. Для Llama 3.3 70B это значит, что текст
+уходит по HTTPS на инфраструктуру Groq — в отличие от Qwen, которая не
+покидает машину. Здесь это не утечка PII, но если этот backend когда-нибудь
+укажут на реальные обращения клиентов, это отдельное решение, которое нужно
+явно согласовать, а не получить по умолчанию через смену backend в конфиге.
+
+| model | accuracy | macro F1 | avg latency | p95 latency |
+|---|---|---|---|---|
+| qwen2.5:3b-instruct (Ollama, CPU) | ? | ? | ? | ? |
+| llama-3.3-70b-versatile (Groq) | ? | ? | ? | ? |
+
+Заполняется прогоном `python scripts/compare_models.py` (нужен `GROQ_API_KEY`
+в `.env`, см. `.env.example`) — **прогон вживую пока не делался**: на момент
+написания раздела Docker (vector-db) был недоступен на этой машине. Плейсхолдеры
+не заменены выдуманными числами.
+
+![Model comparison](exports/model_comparison.png)
+
+Гипотеза, которую нужно проверить прогоном, а не предположить на глаз:
+локальная 3B-модель на этой машине без CUDA идёт ~32 сек/сообщение (см.
+«Честные ограничения» ниже) — Groq хостит инференс на собственном железе
+(LPU), так что разница в latency может оказаться больше, чем разница в
+accuracy между 3B и 70B моделью. Заполнится реальными числами, а не заранее
+объявленным выводом.
 
 ## Трекинг экспериментов (MLflow)
 

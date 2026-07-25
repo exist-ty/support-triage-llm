@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Callable
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -86,16 +87,33 @@ def build_prompt(message_text: str, retrieved_docs: list[dict]) -> str:
     )
 
 
-def classify_message(message_text: str, retrieved_docs: list[dict], max_retries: int = 2) -> TriageResult:
+def classify_message(
+    message_text: str,
+    retrieved_docs: list[dict],
+    max_retries: int = 2,
+    chat_fn: Callable[..., str] | None = None,
+    model_name: str | None = None,
+) -> TriageResult:
+    """chat_fn/model_name по умолчанию — локальная Qwen2.5-3B-Instruct (ollama_client).
+    Передай src.llama_groq_client.chat_json и GROQ_CHAT_MODEL, чтобы классифицировать
+    той же логикой через облачную Llama 3.3 70B — см. scripts/compare_models.py.
+
+    Default резолвится внутри тела функции (не как значение параметра по
+    умолчанию), а не `chat_fn: ... = chat_json`: значения параметров по
+    умолчанию биндятся один раз при определении функции, а не на каждый
+    вызов, поэтому `monkeypatch.setattr(triage, "chat_json", ...)` в тестах
+    не смог бы подменить уже забинженный default."""
+    fn = chat_fn if chat_fn is not None else chat_json
+    name = model_name if model_name is not None else CHAT_MODEL
     prompt = build_prompt(message_text, retrieved_docs)
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
-        raw = chat_json(prompt, system=SYSTEM_PROMPT)
+        raw = fn(prompt, system=SYSTEM_PROMPT)
         try:
             return parse_llm_response(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
             prompt = prompt + "\n\nВАЖНО: предыдущий ответ был невалидным JSON. Верни только JSON-объект."
 
-    raise RuntimeError(f"LLM ({CHAT_MODEL}) не вернула валидный JSON за {max_retries + 1} попыток: {last_error}")
+    raise RuntimeError(f"LLM ({name}) не вернула валидный JSON за {max_retries + 1} попыток: {last_error}")
